@@ -142,6 +142,7 @@ pub mod tsp_solver {
         beta: f32,
         q0: f32,
         iterations: u32,
+        tau0: f32,
     }
 
     struct Ant {
@@ -279,9 +280,8 @@ pub mod tsp_solver {
             let smaller = min(self.current_state, next_move);
             let bigger = max(self.current_state, next_move);
             let old_val = pheromones[(smaller * world.dim + bigger) as usize];
-            pheromones[(smaller * world.dim + bigger) as usize] = (1f32 - config.pheromone_decay)
-                * old_val
-                + config.pheromone_decay * (1f32 / (world.dim as f32));
+            pheromones[(smaller * world.dim + bigger) as usize] =
+                (1f32 - config.pheromone_decay) * old_val + config.pheromone_decay * config.tau0;
 
             self.current_state = next_move;
         }
@@ -328,6 +328,37 @@ pub mod tsp_solver {
         best_sol: Vec<u32>,
     }
 
+    fn approximate_sol(world: &super::tsp_instance::TspInstance) -> f32 {
+        let mut state = 0u32;
+        let mut dist = 0f32;
+
+        let mut visited = vec![false; world.dim as usize];
+        visited[0] = true;
+
+        for _ in 0..(world.dim - 1) {
+            let next_move = visited
+                .iter()
+                .zip(0u32..)
+                .filter(|m| !m.0)
+                .map(|m| m.1)
+                .min_by(|x, y| {
+                    world
+                        .at(state as usize, *x as usize)
+                        .partial_cmp(&world.at(state as usize, *y as usize))
+                        .unwrap()
+                })
+                .unwrap();
+
+            dist += world.at(state as usize, next_move as usize);
+            visited[next_move as usize] = true;
+            state = next_move;
+        }
+
+        dist += world.at(state as usize, 0);
+
+        dist
+    }
+
     impl TspSolver {
         pub fn new(args: clap::ArgMatches) -> TspSolver {
             let file = super::input_parser::FileType::load_file(args.value_of("INPUT").unwrap());
@@ -337,6 +368,9 @@ pub mod tsp_solver {
                 problem_instance.dim as usize
                     * problem_instance.dim as usize
             ];
+
+            let tau0 = approximate_sol(&problem_instance);
+            println!("approximate solution: {}", tau0);
 
             TspSolver {
                 problem_instance,
@@ -351,12 +385,13 @@ pub mod tsp_solver {
                     beta: args.value_of("beta").unwrap().parse().unwrap(),
                     q0: args.value_of("q0").unwrap().parse().unwrap(),
                     iterations: args.value_of("iterations").unwrap().parse().unwrap(),
+                    tau0,
                 },
             }
         }
 
         pub fn solve(&mut self) {
-            for _ in 0..self.config.iterations {
+            for iteration in 0..self.config.iterations {
                 let mut ants: Vec<Ant> = (0..self.config.ant_count)
                     .map(|_| Ant::new(&self.problem_instance))
                     .collect();
@@ -381,7 +416,7 @@ pub mod tsp_solver {
                     .unwrap();
 
                 let best_ant_sol = best_ant.get_solution(&self.problem_instance);
-                println!("{}", best_ant_sol);
+                println!("iteration {}: {}", iteration, best_ant_sol);
 
                 best_ant.update_pheromones(
                     &self.problem_instance,
@@ -398,6 +433,7 @@ pub mod tsp_solver {
 
         pub fn print_result(&self) {
             println!("----------- best solution -----------");
+            println!("approximate solution cost: {}", self.config.tau0);
             println!("cost: {}", self.best_sol_cost);
             println!("solution: {:?}", self.best_sol);
         }

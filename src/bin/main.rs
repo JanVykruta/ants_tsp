@@ -14,18 +14,18 @@ fn main() {
         .arg(
             Arg::with_name("pheromone_decay")
                 .short("pd")
-                .default_value("0.5"),
+                .default_value("0.1"),
         )
         .arg(
             Arg::with_name("evaporation_rate")
                 .short("er")
-                .default_value("0.5"),
+                .default_value("0.1"),
         )
-        .arg(Arg::with_name("ant_count").short("ac").default_value("5"))
-        .arg(Arg::with_name("alpha").default_value("0.5"))
-        .arg(Arg::with_name("beta").default_value("0.5"))
-        .arg(Arg::with_name("q0").default_value("0.5"))
-        .arg(Arg::with_name("iterations").default_value("10"))
+        .arg(Arg::with_name("ant_count").short("ac").default_value("100"))
+        .arg(Arg::with_name("alpha").default_value("0.1"))
+        .arg(Arg::with_name("beta").default_value("2"))
+        .arg(Arg::with_name("q0").default_value("0.9"))
+        .arg(Arg::with_name("iterations").default_value("10000"))
         .get_matches();
 
     let mut solver = tsp_solver::TspSolver::new(matches);
