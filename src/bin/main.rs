@@ -1,10 +1,9 @@
 use ants_tsp::tsp_solver;
 use clap::{App, Arg};
-use std::error::Error;
 
 fn main() {
     let matches = App::new("Ants based TSP solver")
-        .version("0.1.0")
+        .version("0.2.0")
         .author("Jan Vykruta <vykrutak@gmail.com>")
         .arg(
             Arg::with_name("INPUT")
@@ -25,7 +24,6 @@ fn main() {
         .arg(Arg::with_name("ant_count").short("ac").default_value("5"))
         .arg(Arg::with_name("alpha").default_value("0.5"))
         .arg(Arg::with_name("beta").default_value("0.5"))
-        .arg(Arg::with_name("big_q").default_value("0.5"))
         .arg(Arg::with_name("q0").default_value("0.5"))
         .arg(Arg::with_name("iterations").default_value("10"))
         .get_matches();

@@ -6,37 +6,26 @@ mod input_parser {
         Explicit((Vec<f32>, u32)),
         Coordinates((Vec<(f32, f32)>, u32)),
     }
-    pub struct TspFile {
-        pub file_type: FileType,
-    }
 
     fn read_lines(path: &str) -> io::Lines<io::BufReader<File>> {
         let file = File::open(path).expect(&format!("file '{}' could not be opened:", path));
         io::BufReader::new(file).lines()
     }
 
-    fn find_file_type(lines: &Vec<String>) -> (bool, usize) {
-        let mut is_explicit = false;
-        for line in lines.iter() {
-            if line.starts_with("EDGE_WEIGHT_TYPE") {
-                if line.contains("EXPLICIT") {
-                    is_explicit = true;
-                }
+    fn find_file_type(lines: &[String]) -> (bool, usize) {
+        let is_explicit = lines
+            .iter()
+            .any(|l| l.starts_with("EDGE_WEIGHT_TYPE") && l.contains("EXPLICIT"));
 
-                break;
-            }
-        }
+        let starting_index = lines
+            .iter()
+            .zip(0u32..)
+            .find(|l| l.0 == "EDGE_WEIGHT_SECTION" || l.0 == "NODE_COORD_SECTION")
+            .unwrap()
+            .1
+            + 1;
 
-        let mut starting_index = 0;
-
-        for i in 0..lines.len() {
-            if lines[i] == "EDGE_WEIGHT_SECTION" || lines[i] == "NODE_COORD_SECTION" {
-                starting_index = i + 1;
-                break;
-            }
-        }
-
-        (is_explicit, starting_index)
+        (is_explicit, starting_index as usize)
     }
 
     fn construct_option(
@@ -48,49 +37,51 @@ mod input_parser {
         let lines = &lines[starting_index..(starting_index + dim as usize)];
 
         if is_explicit {
-            let mut data: Vec<f32> = vec![];
-            for line in lines {
-                let line = line.trim().split_whitespace();
-
-                for i in line {
-                    let i = i.trim().parse::<f32>().unwrap();
-                    data.push(i);
-                }
-            }
+            let data: Vec<f32> = lines
+                .iter()
+                .map(|l| l.trim().split_whitespace())
+                .flatten()
+                .map(|i| i.trim().parse::<f32>().unwrap())
+                .collect();
             FileType::Explicit((data, dim))
         } else {
-            let mut data: Vec<(f32, f32)> = vec![];
-            for line in lines {
-                let mut line = line.trim().split_whitespace().skip(1);
-
-                data.push((
-                    line.next().unwrap().parse::<f32>().unwrap(),
-                    line.next().unwrap().parse::<f32>().unwrap(),
-                ));
-            }
+            let data: Vec<(f32, f32)> = lines
+                .iter()
+                .map(|l| l.trim().split_whitespace().skip(1))
+                .map(|mut s| {
+                    (
+                        s.next().unwrap().parse::<f32>().unwrap(),
+                        s.next().unwrap().parse::<f32>().unwrap(),
+                    )
+                })
+                .collect();
             FileType::Coordinates((data, dim))
         }
     }
 
-    impl TspFile {
-        pub fn load_file(file_name: &str) -> TspFile {
+    impl FileType {
+        pub fn load_file(file_name: &str) -> FileType {
             let lines: Vec<String> = read_lines(file_name)
                 .map(|l| l.expect("could not parse line"))
                 .collect();
 
-            let mut dim: u32 = 0;
-            for line in lines.iter() {
-                if line.contains("DIMENSION") {
-                    let split: Vec<&str> = line.split(":").map(|l| l.trim()).collect();
-                    dim = split[1].parse::<u32>().unwrap();
-                }
-            }
+            let dim = lines
+                .iter()
+                .find(|l| l.contains("DIMENSION"))
+                .unwrap()
+                .split(":")
+                .map(|l| l.trim())
+                .skip(1)
+                .next()
+                .unwrap()
+                .parse::<u32>()
+                .unwrap();
 
-            let (is_explicit, starting_index) = find_file_type(&lines);
+            let (is_explicit, starting_index) = find_file_type(&lines[..]);
 
             let file_type = construct_option(is_explicit, lines, starting_index, dim);
 
-            TspFile { file_type }
+            file_type
         }
     }
 }
@@ -114,7 +105,6 @@ mod tsp_instance {
 
         for i in 0..dim {
             for j in 0..dim {
-                println!("{:?}", coord[i as usize]);
                 grid[(i * dim + j) as usize] = distance(coord[i as usize], coord[j as usize]);
             }
         }
@@ -123,8 +113,8 @@ mod tsp_instance {
     }
 
     impl TspInstance {
-        pub fn new(file: super::input_parser::TspFile) -> TspInstance {
-            let (grid, dim) = match file.file_type {
+        pub fn new(file: super::input_parser::FileType) -> TspInstance {
+            let (grid, dim) = match file {
                 super::input_parser::FileType::Coordinates((coord, dim)) => {
                     (parse_coordinates(coord, dim), dim)
                 }
@@ -150,7 +140,6 @@ pub mod tsp_solver {
         evaporation_rate: f32,
         alpha: f32,
         beta: f32,
-        big_q: f32,
         q0: f32,
         iterations: u32,
     }
@@ -170,37 +159,34 @@ pub mod tsp_solver {
         pheromones: &[f32],
         config: &Config,
     ) -> u32 {
-        let mut sum = 0f32;
-        for mov in possible_moves {
-            let smaller = min(current_state, *mov);
-            let bigger = max(current_state, *mov);
-            sum += pheromones[(smaller * world.dim + bigger) as usize].powf(config.alpha)
-                * (1f32 / world.at(smaller as usize, bigger as usize)).powf(config.beta);
-        }
+        let sum = possible_moves.iter().fold(0f32, |a, v| {
+            let smaller = min(current_state, *v);
+            let bigger = max(current_state, *v);
+            a + (pheromones[(smaller * world.dim + bigger) as usize].powf(config.alpha)
+                * (1f32 / world.at(smaller as usize, bigger as usize)).powf(config.beta))
+        });
 
-        let mut move_prob = vec![];
-        for mov in possible_moves {
-            let smaller = min(current_state, *mov);
-            let bigger = max(current_state, *mov);
+        let move_prob = possible_moves.iter().map(|m| {
+            let smaller = min(current_state, *m);
+            let bigger = max(current_state, *m);
 
             let nom = pheromones[(smaller * world.dim + bigger) as usize].powf(config.alpha)
                 * (1f32 / world.at(smaller as usize, bigger as usize)).powf(config.beta);
 
-            move_prob.push(nom / sum);
-        }
+            nom / sum
+        });
 
         let random = rand::thread_rng().gen::<f32>();
         let mut prob_sum = 0f32;
 
-        for (mov, prob) in possible_moves.iter().zip(move_prob.iter()) {
-            prob_sum += *prob;
+        for (mov, prob) in possible_moves.iter().zip(move_prob) {
+            prob_sum += prob;
             if prob_sum > random {
                 return *mov;
             }
         }
 
-        // impossible to reach, needed to fool the compiler
-        *possible_moves.last().unwrap()
+        panic!("impossible to reach");
     }
 
     fn argmax(
@@ -210,9 +196,9 @@ pub mod tsp_solver {
         pheromones: &[f32],
         config: &Config,
     ) -> u32 {
-        let mut best_idx = possible_moves[0];
-        let smaller = min(current_state, best_idx);
-        let bigger = max(current_state, best_idx);
+        let mut best_move = possible_moves[0];
+        let smaller = min(current_state, best_move);
+        let bigger = max(current_state, best_move);
         let mut best_val = pheromones[(smaller * world.dim + bigger) as usize]
             * (1f32 / world.at(smaller as usize, bigger as usize)).powf(config.beta);
 
@@ -223,19 +209,19 @@ pub mod tsp_solver {
                 * (1f32 / world.at(smaller as usize, bigger as usize)).powf(config.beta);
             if val > best_val {
                 best_val = val;
-                best_idx = *mov;
+                best_move = *mov;
             }
         }
 
-        best_idx
+        best_move
     }
 
     impl Ant {
         fn new(world: &super::tsp_instance::TspInstance) -> Ant {
-            let visited = vec![false; world.dim as usize];
-
             let start_state = rand::thread_rng().gen_range(0, world.dim);
             let solution: Vec<u32> = vec![start_state];
+            let mut visited = vec![false; world.dim as usize];
+            visited[start_state as usize] = true;
 
             Ant {
                 visited,
@@ -251,6 +237,10 @@ pub mod tsp_solver {
             pheromones: &mut [f32],
             config: &Config,
         ) {
+            if self.is_done {
+                return;
+            }
+
             let possible_moves: Vec<u32> = self
                 .visited
                 .iter()
@@ -334,27 +324,31 @@ pub mod tsp_solver {
         problem_instance: super::tsp_instance::TspInstance,
         pheromone_dist: Vec<f32>,
         config: Config,
+        best_sol_cost: f32,
+        best_sol: Vec<u32>,
     }
 
     impl TspSolver {
         pub fn new(args: clap::ArgMatches) -> TspSolver {
-            let file = super::input_parser::TspFile::load_file(args.value_of("INPUT").unwrap());
+            let file = super::input_parser::FileType::load_file(args.value_of("INPUT").unwrap());
             let problem_instance = super::tsp_instance::TspInstance::new(file);
             let pheromone_dist: Vec<f32> = vec![
                 1f32 / (problem_instance.dim as f32);
                 problem_instance.dim as usize
                     * problem_instance.dim as usize
             ];
+
             TspSolver {
                 problem_instance,
                 pheromone_dist,
+                best_sol: vec![],
+                best_sol_cost: f32::MAX,
                 config: Config {
                     ant_count: args.value_of("ant_count").unwrap().parse().unwrap(),
                     pheromone_decay: args.value_of("pheromone_decay").unwrap().parse().unwrap(),
                     evaporation_rate: args.value_of("evaporation_rate").unwrap().parse().unwrap(),
                     alpha: args.value_of("alpha").unwrap().parse().unwrap(),
                     beta: args.value_of("beta").unwrap().parse().unwrap(),
-                    big_q: args.value_of("big_q").unwrap().parse().unwrap(),
                     q0: args.value_of("q0").unwrap().parse().unwrap(),
                     iterations: args.value_of("iterations").unwrap().parse().unwrap(),
                 },
@@ -368,13 +362,13 @@ pub mod tsp_solver {
                     .collect();
 
                 while ants.iter().any(|a| !a.is_done) {
-                    for ant in ants.iter_mut() {
-                        ant.make_move(
+                    ants.iter_mut().for_each(|a| {
+                        a.make_move(
                             &self.problem_instance,
                             &mut self.pheromone_dist,
                             &self.config,
-                        );
-                    }
+                        )
+                    });
                 }
 
                 let best_ant = ants
@@ -386,24 +380,26 @@ pub mod tsp_solver {
                     })
                     .unwrap();
 
-                println!("{}", best_ant.get_solution(&self.problem_instance));
+                let best_ant_sol = best_ant.get_solution(&self.problem_instance);
+                println!("{}", best_ant_sol);
 
                 best_ant.update_pheromones(
                     &self.problem_instance,
                     &mut self.pheromone_dist,
                     &self.config,
-                )
+                );
+
+                if self.best_sol_cost > best_ant_sol {
+                    self.best_sol_cost = best_ant_sol;
+                    self.best_sol = best_ant.solution.clone();
+                }
             }
         }
 
-        pub fn print_result(&self) {}
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_works() {
-        assert_eq!(2 + 2, 4);
+        pub fn print_result(&self) {
+            println!("----------- best solution -----------");
+            println!("cost: {}", self.best_sol_cost);
+            println!("solution: {:?}", self.best_sol);
+        }
     }
 }
