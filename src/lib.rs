@@ -187,7 +187,10 @@ pub mod tsp_solver {
             }
         }
 
-        panic!("impossible to reach");
+        panic!(format!(
+            "impossible to reach -> random: {}; prob_sum: {}\n",
+            random, prob_sum
+        ));
     }
 
     fn argmax(
