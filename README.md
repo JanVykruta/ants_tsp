@@ -5,7 +5,7 @@ To run use:
 cargo run --release <PROGRAM_ARGS>
 ```
 
-Possible PROGRAM_ARGS can be obtained using (note the `--` before `-h`):
+Possible `PROGRAM_ARGS` can be obtained using (note the `--` before `-h`):
 ```shell
 cargo run --release -- -h
 ```
