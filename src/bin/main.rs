@@ -6,10 +6,15 @@ fn main() {
         .version("0.2.0")
         .author("Jan Vykruta <vykrutak@gmail.com>")
         .arg(
-            Arg::with_name("INPUT")
-                .help("File name of input file.")
+            Arg::with_name("PROBLEM_FILE")
+                .help("File name of problem file.")
                 .required(true)
                 .index(1),
+        )
+        .arg(
+            Arg::with_name("SOLUTION_FILE")
+                .help("File name of optimal solution file.")
+                .index(2),
         )
         .arg(
             Arg::with_name("pheromone_decay")
@@ -28,7 +33,7 @@ fn main() {
         .arg(
             Arg::with_name("iterations")
                 .long("iter")
-                .default_value("10000"),
+                .default_value("100"),
         )
         .get_matches();
 

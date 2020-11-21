@@ -1,134 +1,5 @@
-mod input_parser {
-    use std::fs::File;
-    use std::io::{self, BufRead};
-
-    pub enum FileType {
-        Explicit((Vec<f32>, u32)),
-        Coordinates((Vec<(f32, f32)>, u32)),
-    }
-
-    fn read_lines(path: &str) -> io::Lines<io::BufReader<File>> {
-        let file = File::open(path).expect(&format!("file '{}' could not be opened:", path));
-        io::BufReader::new(file).lines()
-    }
-
-    fn find_file_type(lines: &[String]) -> (bool, usize) {
-        let is_explicit = lines
-            .iter()
-            .any(|l| l.starts_with("EDGE_WEIGHT_TYPE") && l.contains("EXPLICIT"));
-
-        let starting_index = lines
-            .iter()
-            .zip(0u32..)
-            .find(|l| l.0 == "EDGE_WEIGHT_SECTION" || l.0 == "NODE_COORD_SECTION")
-            .unwrap()
-            .1
-            + 1;
-
-        (is_explicit, starting_index as usize)
-    }
-
-    fn construct_option(
-        is_explicit: bool,
-        lines: Vec<String>,
-        starting_index: usize,
-        dim: u32,
-    ) -> FileType {
-        let lines = &lines[starting_index..(starting_index + dim as usize)];
-
-        if is_explicit {
-            let data: Vec<f32> = lines
-                .iter()
-                .map(|l| l.trim().split_whitespace())
-                .flatten()
-                .map(|i| i.trim().parse::<f32>().unwrap())
-                .collect();
-            FileType::Explicit((data, dim))
-        } else {
-            let data: Vec<(f32, f32)> = lines
-                .iter()
-                .map(|l| l.trim().split_whitespace().skip(1))
-                .map(|mut s| {
-                    (
-                        s.next().unwrap().parse::<f32>().unwrap(),
-                        s.next().unwrap().parse::<f32>().unwrap(),
-                    )
-                })
-                .collect();
-            FileType::Coordinates((data, dim))
-        }
-    }
-
-    impl FileType {
-        pub fn load_file(file_name: &str) -> FileType {
-            let lines: Vec<String> = read_lines(file_name)
-                .map(|l| l.expect("could not parse line"))
-                .collect();
-
-            let dim = lines
-                .iter()
-                .find(|l| l.contains("DIMENSION"))
-                .unwrap()
-                .split(":")
-                .map(|l| l.trim())
-                .skip(1)
-                .next()
-                .unwrap()
-                .parse::<u32>()
-                .unwrap();
-
-            let (is_explicit, starting_index) = find_file_type(&lines[..]);
-
-            let file_type = construct_option(is_explicit, lines, starting_index, dim);
-
-            file_type
-        }
-    }
-}
-
-mod tsp_instance {
-    pub struct TspInstance {
-        pub grid: Vec<f32>,
-        pub dim: u32,
-    }
-
-    fn distance(p1: (f32, f32), p2: (f32, f32)) -> f32 {
-        let x = (p2.0 - p1.0) * (p2.0 - p1.0) + (p2.1 - p1.1) * (p2.1 - p1.1);
-
-        x.sqrt()
-    }
-
-    fn parse_coordinates(coord: Vec<(f32, f32)>, dim: u32) -> Vec<f32> {
-        let mut grid: Vec<f32> = vec![];
-
-        grid.resize(dim as usize * dim as usize, 0f32);
-
-        for i in 0..dim {
-            for j in 0..dim {
-                grid[(i * dim + j) as usize] = distance(coord[i as usize], coord[j as usize]);
-            }
-        }
-
-        grid
-    }
-
-    impl TspInstance {
-        pub fn new(file: super::input_parser::FileType) -> TspInstance {
-            let (grid, dim) = match file {
-                super::input_parser::FileType::Coordinates((coord, dim)) => {
-                    (parse_coordinates(coord, dim), dim)
-                }
-                super::input_parser::FileType::Explicit(expl) => expl,
-            };
-
-            TspInstance { grid, dim }
-        }
-
-        pub fn at(&self, x: usize, y: usize) -> f32 {
-            self.grid[x * self.dim as usize + y]
-        }
-    }
-}
+mod input_parser;
+mod tsp_instance;
 
 pub mod tsp_solver {
     use rand::Rng;
@@ -143,6 +14,7 @@ pub mod tsp_solver {
         q0: f32,
         iterations: u32,
         tau0: f32,
+        approximate_solution: f32,
     }
 
     struct Ant {
@@ -222,7 +94,7 @@ pub mod tsp_solver {
 
     impl Ant {
         fn new(world: &super::tsp_instance::TspInstance) -> Ant {
-            let start_state = rand::thread_rng().gen_range(0, world.dim);
+            let start_state = 0u32;
             let solution: Vec<u32> = vec![start_state];
             let mut visited = vec![false; world.dim as usize];
             visited[start_state as usize] = true;
@@ -290,15 +162,7 @@ pub mod tsp_solver {
         }
 
         pub fn get_solution(&self, world: &super::tsp_instance::TspInstance) -> f32 {
-            let mut state = self.solution[0];
-            let mut dist = 0f32;
-
-            for next_state in &self.solution[1..] {
-                dist += world.at(state as usize, *next_state as usize);
-                state = *next_state;
-            }
-
-            dist
+            world.evaluate_solution(&self.solution)
         }
 
         fn update_pheromones(
@@ -364,16 +228,16 @@ pub mod tsp_solver {
 
     impl TspSolver {
         pub fn new(args: clap::ArgMatches) -> TspSolver {
-            let file = super::input_parser::FileType::load_file(args.value_of("INPUT").unwrap());
-            let problem_instance = super::tsp_instance::TspInstance::new(file);
-            let pheromone_dist: Vec<f32> = vec![
-                1f32 / (problem_instance.dim as f32);
-                problem_instance.dim as usize
-                    * problem_instance.dim as usize
-            ];
+            let problem_file = args.value_of("PROBLEM_FILE").unwrap();
+            let solution_file = args.value_of("SOLUTION_FILE");
 
-            let tau0 = approximate_sol(&problem_instance);
-            println!("approximate solution: {}", tau0);
+            let problem_instance =
+                super::tsp_instance::TspInstance::new(problem_file, solution_file);
+
+            let approximate_solution = approximate_sol(&problem_instance);
+            let tau0 = 1f32 / (problem_instance.dim as f32 * approximate_solution);
+            let pheromone_dist: Vec<f32> =
+                vec![tau0; problem_instance.dim as usize * problem_instance.dim as usize];
 
             TspSolver {
                 problem_instance,
@@ -389,6 +253,7 @@ pub mod tsp_solver {
                     q0: args.value_of("q0").unwrap().parse().unwrap(),
                     iterations: args.value_of("iterations").unwrap().parse().unwrap(),
                     tau0,
+                    approximate_solution,
                 },
             }
         }
@@ -435,10 +300,23 @@ pub mod tsp_solver {
         }
 
         pub fn print_result(&self) {
-            println!("----------- best solution -----------");
-            println!("approximate solution cost: {}", self.config.tau0);
-            println!("cost: {}", self.best_sol_cost);
-            println!("solution: {:?}", self.best_sol);
+            println!("----------- results -----------");
+            println!(
+                "approximate solution cost: {}",
+                self.config.approximate_solution
+            );
+
+            if let Some((optimal_sol, optimal_sol_cost)) =
+                self.problem_instance.get_optimal_solution()
+            {
+                println!("optimal solution cost: {}", optimal_sol_cost);
+                println!("optimal solution: {:?}", optimal_sol);
+            } else {
+                println!("optimal solution: unknown");
+            }
+
+            println!("best solution cost: {}", self.best_sol_cost);
+            println!("best solution: {:?}", self.best_sol);
         }
     }
 }
